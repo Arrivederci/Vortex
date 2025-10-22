@@ -122,10 +122,13 @@ class DatasetManager:
         indices: List[Tuple[pd.Index, pd.Index]] = []
         start_idx = 0
         for fold_size in fold_sizes:
-            val_dates = unique_dates[start_idx : start_idx + fold_size]
-            start_idx += fold_size
-            embargo_start = max(0, start_idx - embargo)
-            embargo_end = min(len(unique_dates), start_idx + embargo)
+            val_start_idx = start_idx
+            val_end_idx = val_start_idx + fold_size
+            val_dates = unique_dates[val_start_idx:val_end_idx]
+            start_idx = val_end_idx
+            # 计算训练集应剔除的禁区范围，确保验证集附近的日期不会泄露到训练集。
+            embargo_start = max(0, val_start_idx - embargo)
+            embargo_end = min(len(unique_dates), val_end_idx + embargo)
             train_dates = unique_dates[:embargo_start] + unique_dates[embargo_end:]
             val_index = data.index.get_level_values(0).isin(val_dates)
             train_index = data.index.get_level_values(0).isin(train_dates)

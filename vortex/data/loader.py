@@ -42,10 +42,16 @@ class DataLoader:
         )
         merged.sort_values([self.date_column, self.asset_column], inplace=True)
         merged = self._compute_targets(merged)
+        merged.sort_values([self.date_column, self.asset_column], inplace=True)
         merged.set_index([self.date_column, self.asset_column], inplace=True)
         merged.index = pd.MultiIndex.from_arrays(
-            [pd.to_datetime(merged.index.get_level_values(0)), merged.index.get_level_values(1)]
+            [
+                pd.to_datetime(merged.index.get_level_values(0)),
+                merged.index.get_level_values(1),
+            ],
+            names=[self.date_column, self.asset_column],
         )
+        merged.sort_index(level=[0, 1], inplace=True)
         return merged
 
     def trading_calendar(self, data: Optional[pd.DataFrame] = None) -> Iterable[pd.Timestamp]:

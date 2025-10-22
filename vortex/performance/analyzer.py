@@ -71,16 +71,23 @@ class PerformanceAnalyzer:
     def _compute_quantile_returns(self, df: pd.DataFrame) -> Dict[str, Dict[str, pd.Series]]:
         q = self.config.quantiles
         df = df.copy()
-        df["quantile"] = df.groupby("datetime")["prediction"].transform(
-            lambda x: pd.qcut(x.rank(method="first"), q=q, labels=False) + 1
-        )
+        
+        def assign_quantiles(series: pd.Series) -> pd.Series:
+            group_size = series.size
+            q_eff = max(1, min(q, group_size))
+            ranked = series.rank(method="first")
+            return pd.qcut(ranked, q=q_eff, labels=False) + 1
+
+        df["quantile"] = (
+            df.groupby("datetime")["prediction"].transform(assign_quantiles)
+        ).astype("Int64")
         quantile_daily = (
-            df.groupby(["datetime", "quantile"])["period_return"]
+            df.groupby(["datetime", "quantile"], dropna=True)["period_return"]
             .mean()
             .unstack("quantile")
-            .sort_index()
-            .fillna(0.0)
         )
+        quantile_daily = quantile_daily.reindex(columns=range(1, q + 1))
+        quantile_daily = quantile_daily.sort_index().fillna(0.0)
         cumulative = (1 + quantile_daily).cumprod()
         annual_returns = {
             f"quantile_{int(col)}_annual_return": float((1 + quantile_daily[col].mean()) ** 252 - 1)

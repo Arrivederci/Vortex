@@ -5,3 +5,4 @@ plotly
 scikit-learn
 pytest
 pyyaml
+pyarrow

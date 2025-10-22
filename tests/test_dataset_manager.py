@@ -1,3 +1,5 @@
+"""DatasetManager 单元测试，确保滚动切分逻辑正确。"""
+
 import pytest
 
 pd = pytest.importorskip("pandas")
@@ -6,6 +8,11 @@ from vortex.dataset.manager import DatasetManager, WalkForwardConfig
 
 
 def make_sample_data():
+    """Create synthetic dataset for testing.
+
+    中文说明：生成用于测试的多层索引示例数据集。
+    """
+
     dates = pd.date_range("2020-01-01", periods=20, freq="B")
     assets = ["000001.SZ", "000002.SZ"]
     index = pd.MultiIndex.from_product([dates, assets], names=["交易日期", "股票代码"])
@@ -19,6 +26,11 @@ def make_sample_data():
 
 
 def test_generate_splits_fixed_window():
+    """Verify fixed window walk-forward splits.
+
+    中文说明：测试固定窗口滚动切分产出的训练与测试集是否正确。
+    """
+
     data = make_sample_data()
     calendar = sorted(data.index.get_level_values(0).unique())
     cfg = WalkForwardConfig(
@@ -41,6 +53,11 @@ def test_generate_splits_fixed_window():
 
 
 def test_purged_k_fold_respects_embargo():
+    """Ensure purged k-fold enforces embargo periods.
+
+    中文说明：验证交叉验证的训练与验证索引在禁区约束下互斥。
+    """
+
     data = make_sample_data()
     calendar = sorted(data.index.get_level_values(0).unique())
     cfg = WalkForwardConfig(

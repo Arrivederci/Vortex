@@ -1,3 +1,5 @@
+"""工作流集成测试，验证 run_workflow 的端到端执行。"""
+
 import json
 from pathlib import Path
 
@@ -11,6 +13,11 @@ from vortex.orchestrator import run_workflow
 
 
 def create_sample_files(tmp_path: Path):
+    """Create synthetic factor and price files for testing.
+
+    中文说明：生成示例因子与行情数据文件供流程测试使用。
+    """
+
     dates = pd.date_range("2020-01-01", periods=40, freq="B")
     assets = ["000001.SZ", "000002.SZ", "000003.SZ"]
     records = []
@@ -43,6 +50,11 @@ def create_sample_files(tmp_path: Path):
 
 
 def test_run_workflow_end_to_end(tmp_path: Path):
+    """Run the orchestrator workflow end-to-end with sample data.
+
+    中文说明：使用模拟数据运行全流程并验证输出文件与指标。
+    """
+
     factor_path, ohlc_dir = create_sample_files(tmp_path)
     config = {
         "data_sources": {

@@ -93,9 +93,13 @@ class PerformanceAnalyzer:
         scores = []
         dates = []
         for dt, group in df.groupby("datetime"):
-            if group["prediction"].nunique() <= 1:
+            valid = group[["target_return", "prediction"]].dropna()
+            if valid.empty:
                 continue
-            scores.append(r2_score(group["target_return"], group["prediction"]))
+            if valid["prediction"].nunique() <= 1 or valid["target_return"].nunique() <= 1:
+                continue
+            # 先移除缺失值并确保目标存在波动，避免 R² 计算返回 NaN。
+            scores.append(r2_score(valid["target_return"], valid["prediction"]))
             dates.append(dt)
         return pd.Series(scores, index=pd.DatetimeIndex(dates), name="r2")
 

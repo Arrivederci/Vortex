@@ -72,5 +72,16 @@ def test_purged_k_fold_respects_embargo():
     manager = DatasetManager(cfg, calendar)
     folds = manager.purged_k_fold(data, n_splits=3)
     assert len(folds) == 3
+    embargo = cfg.embargo_length
     for train_idx, val_idx in folds:
+        train_dates = set(train_idx.get_level_values(0))
+        val_dates = sorted(val_idx.get_level_values(0).unique())
         assert set(train_idx).isdisjoint(set(val_idx))
+        for val_date in val_dates:
+            embargo_window = {
+                val_date + pd.tseries.offsets.BDay(offset)
+                for offset in range(-embargo, embargo + 1)
+            }
+            # 移除非交易日，确保只对实际存在的日期进行检查。
+            embargo_window &= set(data.index.get_level_values(0).unique())
+            assert not train_dates.intersection(embargo_window)

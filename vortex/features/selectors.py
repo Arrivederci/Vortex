@@ -57,12 +57,19 @@ class RankICFilter(FeatureSelectorBase):
             icir = mean / std if std and not math.isnan(std) else 0.0
             stats[col] = {"ic_mean": mean, "ic_std": std, "icir": icir}
         if not stats:
-            raise ValueError("No valid IC values computed; cannot rank features")
+            # 若所有分组的目标或因子均无有效波动，则退化为保留原始特征。
+            stats = {
+                col: {"ic_mean": 0.0, "ic_std": float("nan"), "icir": 0.0}
+                for col in X.columns
+            }
         sorted_columns = sorted(stats, key=lambda c: abs(stats[c]["ic_mean"]), reverse=True)
         if self.min_icir is not None:
             sorted_columns = [c for c in sorted_columns if stats[c]["icir"] >= self.min_icir]
         if self.top_k is not None:
             sorted_columns = sorted_columns[: self.top_k]
+        if not sorted_columns:
+            # 若阈值筛选后为空，则选择前 top_k 或全部特征作为兜底策略。
+            sorted_columns = list(X.columns[: self.top_k]) if self.top_k else list(X.columns)
         self.selected_columns = sorted_columns
         self.ic_stats = stats
         return self

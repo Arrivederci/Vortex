@@ -58,3 +58,27 @@ def test_pca_transformer_shapes():
     transformed = pipeline.fit_transform(X, y)
     assert transformed.shape == (len(index), 2)
     assert all(col.startswith("pca_") for col in transformed.columns)
+
+
+def test_rank_ic_filter_handles_constant_target():
+    """RankICFilter should gracefully handle constant targets.
+
+    中文说明：当目标收益恒定时仍应返回有效的特征集合。
+    """
+
+    dates = pd.date_range("2020-01-01", periods=4, freq="B")
+    assets = ["000001.SZ", "000002.SZ"]
+    index = pd.MultiIndex.from_product([dates, assets], names=["交易日期", "股票代码"])
+    X = pd.DataFrame({"因子1": range(len(index)), "因子2": range(len(index))}, index=index)
+    y = pd.Series(0.01, index=index, name="target_return")
+
+    pipeline = build_pipeline(
+        [
+            {"method": "rank_ic_filter", "params": {"top_k": 1}},
+        ],
+        SELECTOR_REGISTRY,
+    )
+
+    transformed = pipeline.fit_transform(X, y)
+    assert transformed.shape[1] == 1
+    assert set(transformed.columns).issubset(X.columns)

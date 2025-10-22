@@ -1,3 +1,5 @@
+"""工作流编排模块，串联配置加载、特征处理、模型训练与评估。"""
+
 from __future__ import annotations
 
 import pathlib
@@ -14,6 +16,11 @@ from vortex.performance.analyzer import PerformanceAnalyzer, PerformanceConfig
 
 
 def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str, float]:
+    """Execute the full machine learning workflow described by configuration.
+
+    中文说明：根据配置文件依次完成数据加载、特征处理、模型训练及绩效评估。
+    """
+
     config = ConfigLoader(config_path).load()
 
     target_cfg = TargetConfig(**config["data_sources"]["target_return"])
@@ -35,6 +42,7 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
 
     evaluation_rows: List[pd.DataFrame] = []
     for train_X, train_y, test_X, test_y, info in dataset_manager.generate_splits(data):
+        # 针对每个滚动窗口拟合特征流水线与模型。
         train_features = feature_pipeline.fit_transform(train_X, train_y)
         test_features = feature_pipeline.transform(test_X)
         model_trainer.fit(train_features, train_y)

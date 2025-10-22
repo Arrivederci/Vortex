@@ -1,3 +1,5 @@
+"""数据集管理模块，负责创建时间序列模型所需的训练测试切分。"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,6 +12,11 @@ IndexSlice = pd.IndexSlice
 
 @dataclass
 class WalkForwardConfig:
+    """Configuration for walk-forward data splitting.
+
+    中文说明：定义滚动训练的起止日期、窗口类型及禁区长度等参数。
+    """
+
     start_date: str
     end_date: str
     train_window_type: str
@@ -20,7 +27,10 @@ class WalkForwardConfig:
 
 
 class DatasetManager:
-    """Create purged walk-forward train/test splits for time-series data."""
+    """Create purged walk-forward train/test splits for time-series data.
+
+    中文说明：根据交易日历生成去污染的滚动训练与测试数据集。
+    """
 
     def __init__(
         self,
@@ -28,6 +38,10 @@ class DatasetManager:
         trading_calendar: Sequence[pd.Timestamp],
         target_column: str = "target_return",
     ) -> None:
+        """Initialize the manager with configuration and calendar.
+
+        中文说明：保存配置、标准化交易日历并记录目标列名称。
+        """
         self.config = config
         self.trading_calendar = [pd.Timestamp(d) for d in trading_calendar]
         self.target_column = target_column
@@ -37,6 +51,10 @@ class DatasetManager:
         data: pd.DataFrame,
         feature_columns: Optional[Sequence[str]] = None,
     ) -> Generator[Tuple[pd.DataFrame, pd.Series, pd.DataFrame, pd.Series, Dict[str, pd.Timestamp]], None, None]:
+        """Yield successive train/test splits according to the configuration.
+
+        中文说明：根据滚动窗口配置依次产出训练集与测试集切分。
+        """
         cfg = self.config
         start = pd.Timestamp(cfg.start_date)
         end = pd.Timestamp(cfg.end_date)
@@ -89,6 +107,10 @@ class DatasetManager:
         n_splits: int,
         embargo_length: Optional[int] = None,
     ) -> List[Tuple[pd.Index, pd.Index]]:
+        """Generate purged k-fold cross-validation indices.
+
+        中文说明：在考虑禁区的情况下生成时间序列交叉验证索引。
+        """
         embargo = self.config.embargo_length if embargo_length is None else embargo_length
         unique_dates = sorted(data.index.get_level_values(0).unique())
         if n_splits < 2:
@@ -117,6 +139,10 @@ class DatasetManager:
         end_date: pd.Timestamp,
         feature_columns: Optional[Sequence[str]],
     ) -> Tuple[pd.DataFrame, pd.Series]:
+        """Select a subset of the dataset for given date range.
+
+        中文说明：按照日期范围切片数据集并拆分特征与目标。
+        """
         idx = IndexSlice[start_date:end_date, :]
         subset = data.loc[idx]
         subset = subset.sort_index()

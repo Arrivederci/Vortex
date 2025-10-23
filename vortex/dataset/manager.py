@@ -107,34 +107,47 @@ class DatasetManager:
         n_splits: int,
         embargo_length: Optional[int] = None,
     ) -> List[Tuple[pd.Index, pd.Index]]:
-        """Generate purged k-fold cross-validation indices.
+        """Generate purged time-series cross-validation indices.
 
-        中文说明：在考虑禁区的情况下生成时间序列交叉验证索引。
+        中文说明：按照时序顺序划分验证集，确保训练样本均早于验证集并遵守禁区约束。
         """
+
         embargo = self.config.embargo_length if embargo_length is None else embargo_length
         unique_dates = sorted(data.index.get_level_values(0).unique())
         if n_splits < 2:
             raise ValueError("n_splits must be at least 2")
+        if n_splits > len(unique_dates):
+            raise ValueError("n_splits cannot exceed the number of available dates")
+
         fold_sizes = [len(unique_dates) // n_splits] * n_splits
         remainder = len(unique_dates) % n_splits
         for i in range(remainder):
             fold_sizes[i] += 1
+
         indices: List[Tuple[pd.Index, pd.Index]] = []
-        start_idx = 0
+        cursor = 0
         for fold_size in fold_sizes:
-            val_start_idx = start_idx
-            val_end_idx = start_idx + fold_size
+            val_start_idx = cursor
+            val_end_idx = cursor + fold_size
             val_dates = unique_dates[val_start_idx:val_end_idx]
-            start_idx = val_end_idx
+            cursor = val_end_idx
+            if not val_dates:
+                continue
 
-            embargo_start_idx = max(0, val_start_idx - embargo)
-            embargo_end_idx = min(len(unique_dates), val_end_idx + embargo)
+            train_end_idx = max(0, val_start_idx - embargo)
+            train_dates = unique_dates[:train_end_idx]
+            if not train_dates:
+                # 如果禁区导致没有有效训练样本，则跳过该折并尝试后续折次。
+                continue
 
-            # 训练集需要剔除验证区间及其禁区范围，确保索引完全互斥。
-            train_dates = unique_dates[:embargo_start_idx] + unique_dates[embargo_end_idx:]
-            val_index = data.index.get_level_values(0).isin(val_dates)
-            train_index = data.index.get_level_values(0).isin(train_dates)
-            indices.append((data.index[train_index], data.index[val_index]))
+            train_mask = data.index.get_level_values(0).isin(train_dates)
+            val_mask = data.index.get_level_values(0).isin(val_dates)
+            if train_mask.sum() == 0 or val_mask.sum() == 0:
+                continue
+            indices.append((data.index[train_mask], data.index[val_mask]))
+
+        if not indices:
+            raise ValueError("Unable to create any valid folds with the provided configuration")
         return indices
 
     def _slice_dataset(

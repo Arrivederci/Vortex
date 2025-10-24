@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
+from pathlib import Path
 from typing import Callable, Dict, Type
 
 from .base import BaseModel
@@ -39,15 +42,23 @@ def get_model_class(name: str) -> Type[BaseModel]:
     return MODEL_REGISTRY[name]
 
 
-# 中文说明：在模块加载时导入内置模型文件，确保默认模型自动注册。
-try:  # pragma: no cover - 导入失败会在使用阶段显式暴露
-    from . import elastic_net  # noqa: F401
-    from . import lightgbm  # noqa: F401
-    from . import mlp  # noqa: F401
-    from . import random_forest  # noqa: F401
-except ImportError:
-    # 中文说明：若依赖未安装（例如 LightGBM），保持静默，访问时会抛出明确异常。
-    pass
+def _auto_import_algorithms() -> None:
+    """Import built-in algorithm modules so they register on access."""
+
+    # 中文说明：遍历算法目录并导入其中的实现模块，确保默认模型自动注册。
+    package_path = Path(__file__).resolve().parent
+    for module_info in pkgutil.iter_modules([str(package_path)]):
+        if module_info.ispkg or module_info.name in {"base", "registry"}:
+            continue
+        module_name = f"{__name__.rsplit('.', 1)[0]}.{module_info.name}"
+        try:
+            importlib.import_module(module_name)
+        except ImportError:
+            # 中文说明：当可选依赖缺失时跳过该模块，使用时会得到明确的异常提示。
+            continue
+
+
+_auto_import_algorithms()
 
 
 __all__ = ["MODEL_REGISTRY", "register_model", "get_model_class"]

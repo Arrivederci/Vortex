@@ -1,0 +1,84 @@
+# Vortex 训练流程配置示例
+# 说明：该文件展示了一份覆盖核心功能的完整配置，并在每个字段旁给出中文注释，指出参数含义及是否必填。
+
+# 数据相关配置
+# 必填：用于指定因子与行情数据的来源，并定义目标收益计算方式。
+data_sources:
+  factor_path: "./data/factors/example_factors.parquet"  # 必填：因子数据 Parquet 文件路径，必须存在。
+  ohlc_path: "./data/ohlc"  # 必填：行情 CSV 文件所在目录，需包含至少一个 csv。
+  date_column: "交易日期"  # 选填：日期列名称，如不填则使用默认值 "交易日期"。
+  asset_column: "股票代码"  # 选填：资产代码列名称，默认 "股票代码"。
+  close_column: "收盘价_复权"  # 选填：收盘价列名称，用于计算收益，默认 "收盘价_复权"。
+  target_return:
+    period: 5  # 必填：持有期长度（交易日数），决定前瞻收益窗口。
+    type: "forward_return"  # 必填：目标类型，目前仅支持 forward_return。
+    entry_price_column: null  # 选填：开仓价列名，缺省时采用 close_column。
+    exit_price_column: null  # 选填：平仓价列名，缺省时采用 close_column。
+    entry_shift: 0  # 选填：建仓相对于当前行的偏移，默认 0 表示当日建仓。
+    exit_shift: null  # 选填：平仓相对于当前行的偏移，缺省时等于 entry_shift + period。
+
+# 数据集划分配置
+# 必填：控制走一步检验与内层交叉验证的切分方式。
+dataset_manager:
+  walk_forward:
+    start_date: "2018-01-01"  # 必填：回测起始日期。
+    end_date: "2020-12-31"  # 必填：回测结束日期。
+    train_window_type: "expanding"  # 必填：训练窗口类型，可选 expanding / fixed。
+    train_length: 252  # 必填：训练集最小包含的交易日数量。
+    test_length: 21  # 必填：每个测试窗口的交易日数量。
+    step_length: 21  # 必填：滑窗步长，控制下一次滚动的起始点。
+    embargo_length: 5  # 必填：禁区长度，防止训练集与测试集信息泄漏。
+  inner_cv:
+    enable: true  # 选填：是否启用内层交叉验证调参，默认为 false。
+    n_splits: 3  # 启用时必填：内层折数，至少为 2。
+    embargo_length: 5  # 选填：内层交叉验证的禁区长度，缺省时复用 walk_forward 配置。
+    metric: "mse"  # 选填：调参与评价指标，可选 mse 或 rank_ic。
+
+# 特征工程配置
+# 必填：定义特征选择/转换流水线，至少包含一个步骤。
+feature_selector:
+  pipeline:
+    - method: "pca"  # 必填：步骤使用的算法名称，此处示例为主成分分析。
+      params:
+        n_components: 20  # 选填：主成分数量，默认 10；较大值会保留更多信息。
+    - method: "rank_ic_filter"  # 第二步通过 Rank IC 筛选效果最好的因子。
+      params:
+        top_k: 100  # 选填：保留的因子数量上限，未设置时不限制数量。
+        min_icir: 0.5  # 选填：ICIR 阈值，低于该值的因子将被剔除。
+
+# 模型相关配置
+# 必填：指定预处理器、模型以及调参与持久化策略。
+model:
+  preprocessor:
+    method: "standard_scaler"  # 必填：预处理方式，可选 none/rank/standard_scaler。
+    params: {}  # 选填：预处理器额外参数，此处标准化无需额外参数。
+  name: "lightgbm"  # 必填：模型名称，需要在 registry 中注册。
+  params:
+    n_estimators: 300  # 选填：基学习器数量。
+    learning_rate: 0.05  # 选填：学习率，影响收敛速度。
+    num_leaves: 64  # 选填：叶节点最大数量，控制模型复杂度。
+    subsample: 0.8  # 选填：行采样比例，缓解过拟合。
+    colsample_bytree: 0.8  # 选填：列采样比例。
+    reg_alpha: 0.1  # 选填：L1 正则化系数。
+    reg_lambda: 0.5  # 选填：L2 正则化系数。
+    random_state: 42  # 选填：随机数种子，便于复现。
+  persistence:
+    enable: true  # 选填：是否保存训练好的模型，默认 false。
+    save_path: "./artifacts/models"  # 启用时必填：模型保存目录。
+    filename_template: "{model_name}_{train_end_date}"  # 启用时必填：文件命名模板。
+  tuning:
+    enable: true  # 选填：是否启用配置化调参，默认 false。
+    candidates:
+      - n_estimators: 200  # 选填：候选参数组合，键与 model.params 对应。
+        num_leaves: 48
+        learning_rate: 0.07
+      - n_estimators: 320
+        num_leaves: 72
+        learning_rate: 0.04
+
+# 绩效评估配置
+# 必填：决定绩效分析输出的指标维度及假设。
+performance_analyzer:
+  quantiles: 5  # 选填：分组数量，默认为 5。
+  risk_free_rate: 0.02  # 选填：无风险利率年化值，用于计算夏普比率。
+  group_by_columns: null  # 选填：指定额外分组列，缺省表示仅按日期聚合。

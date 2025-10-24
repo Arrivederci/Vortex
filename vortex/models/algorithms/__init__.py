@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
+import importlib
+import pkgutil
+from pathlib import Path
+
 from .registry import MODEL_REGISTRY, get_model_class, register_model
 
-# 中文说明：导入内置模型模块以触发装饰器注册，便于通过配置直接使用。
-from . import elastic_net  # noqa: F401
-from . import lightgbm  # noqa: F401
-from . import mlp  # noqa: F401
-from . import random_forest  # noqa: F401
+
+def _auto_import_algorithms() -> None:
+    """Import algorithm modules dynamically so decorators register models."""
+
+    # 中文说明：遍历算法子包中的所有模块并导入，确保新增模型自动完成注册。
+    package_path = Path(__file__).resolve().parent
+    for module_info in pkgutil.iter_modules([str(package_path)]):
+        if module_info.ispkg or module_info.name in {"base", "registry"}:
+            continue
+        module_name = f"{__name__}.{module_info.name}"
+        try:
+            importlib.import_module(module_name)
+        except ImportError:
+            # 中文说明：当模型依赖未安装时跳过导入，调用方在实际使用时会获得明确提示。
+            continue
+
+
+_auto_import_algorithms()
 
 __all__ = [
     "MODEL_REGISTRY",

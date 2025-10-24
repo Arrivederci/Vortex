@@ -13,11 +13,15 @@ import pandas as pd
 class TargetConfig:
     """Target configuration definition.
 
-    中文说明：描述目标收益的滚动周期与计算方式。
+    中文说明：描述目标收益的滚动周期与计算方式，并允许自定义开/平仓价来源。
     """
 
     period: int
     type: str = "forward_return"
+    entry_price_column: Optional[str] = None
+    exit_price_column: Optional[str] = None
+    entry_shift: int = 0
+    exit_shift: Optional[int] = None
 
 
 class DataLoader:
@@ -116,10 +120,24 @@ class DataLoader:
         period = self.target_config.period
         df = df.copy()
         df.sort_values([self.asset_column, self.date_column], inplace=True)
-        df["period_return"] = (
-            df.groupby(self.asset_column)[self.close_column]
-            .pct_change(period)
-            .shift(-period)
-        )
+        cfg = self.target_config
+        entry_column = cfg.entry_price_column or self.close_column
+        exit_column = cfg.exit_price_column or self.close_column
+        entry_shift = cfg.entry_shift
+        if entry_shift < 0:
+            raise ValueError("entry_shift must be non-negative for forward returns")
+        # 中文说明：若未指定平仓偏移，则默认在持有 ``period`` 日后离场。
+        exit_shift = cfg.exit_shift if cfg.exit_shift is not None else entry_shift + period
+        if exit_shift < entry_shift:
+            raise ValueError(
+                "exit_shift must be greater than or equal to entry_shift for forward returns"
+            )
+        if exit_shift < 0:
+            raise ValueError("exit_shift must be non-negative for forward returns")
+        grouped = df.groupby(self.asset_column, group_keys=False)
+        # 中文说明：使用向量化偏移在分组内部直接获取未来的开/平仓价，避免显式循环。
+        entry_price = grouped[entry_column].shift(-entry_shift)
+        exit_price = grouped[exit_column].shift(-exit_shift)
+        df["period_return"] = exit_price / entry_price - 1
         df["target_return"] = df["period_return"]
         return df

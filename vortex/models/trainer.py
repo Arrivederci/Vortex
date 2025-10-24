@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from .algorithms.registry import MODEL_REGISTRY
+from .algorithms.registry import get_model_class
 from .preprocessors.base import PREPROCESSOR_REGISTRY, BasePreprocessor
 
 
@@ -46,10 +46,15 @@ class ModelTrainer:
         self.preprocessor: BasePreprocessor = PREPROCESSOR_REGISTRY[method](**params)
 
         name = model_cfg.get("name")
-        if name not in MODEL_REGISTRY:
-            raise ValueError(f"Unknown model name: {name}")
+        if not name:
+            raise ValueError("Model configuration must include a 'name' field")
+        try:
+            model_cls = get_model_class(name)
+        except KeyError as exc:
+            raise ValueError(f"Unknown model name: {name}") from exc
         model_params = model_cfg.get("params", {})
-        self.model = MODEL_REGISTRY[name](**model_params)
+        # 中文说明：通过注册表返回的模型类实例化模型，支持装饰器扩展的新模型。
+        self.model = model_cls(**model_params)
 
         persistence_cfg = model_cfg.get("persistence", {})
         if persistence_cfg.get("enable"):

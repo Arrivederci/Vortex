@@ -121,7 +121,7 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
     inner_cv_cfg = config["dataset_manager"].get("inner_cv", {})
 
     evaluation_rows: List[pd.DataFrame] = []
-    for train_X, train_y, test_X, test_y, info in dataset_manager.generate_splits(data):
+    for train_X, train_y, test_X, test_y, info in dataset_manager.generate_splits(data, feature_columns=[col for col in data.columns if col.startswith("factor_")]):
         best_params = _tune_hyperparameters(
             dataset_manager,
             train_X,

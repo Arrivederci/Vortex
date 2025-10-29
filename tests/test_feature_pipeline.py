@@ -1,6 +1,8 @@
 """特征流水线单元测试，覆盖筛选器与降维器行为。"""
 
 import pytest
+from pandas.testing import assert_frame_equal
+
 
 np = pytest.importorskip("numpy")
 pd = pytest.importorskip("pandas")
@@ -82,3 +84,28 @@ def test_rank_ic_filter_handles_constant_target():
     transformed = pipeline.fit_transform(X, y)
     assert transformed.shape[1] == 1
     assert set(transformed.columns).issubset(X.columns)
+
+
+
+
+def test_default_selector_returns_identical_frame():
+    """Default selector should behave as a pass-through transformer.
+
+    中文说明：默认特征选择器仅做透传，输出应与输入完全一致。
+    """
+
+    dates = pd.date_range("2021-01-01", periods=3, freq="B")
+    assets = ["000001.SZ", "000002.SZ"]
+    index = pd.MultiIndex.from_product([dates, assets], names=["交易日期", "股票代码"])
+    X = pd.DataFrame({
+        "alpha": np.arange(len(index)),
+        "beta": np.arange(len(index)) * 2,
+    }, index=index)
+    y = pd.Series(np.linspace(0, 1, len(index)), index=index)
+
+    pipeline = build_pipeline([
+        {"method": "default"},
+    ], SELECTOR_REGISTRY)
+
+    transformed = pipeline.fit_transform(X, y)
+    assert_frame_equal(transformed, X)

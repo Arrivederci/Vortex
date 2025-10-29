@@ -55,26 +55,22 @@ class DataLoader:
 
         中文说明：载入因子与行情数据，执行合并、排序与目标计算。
         """
-        factors = self._load_factors()
-        market = self._load_market_data()
-        merged = factors.merge(
-            market,
-            on=[self.date_column, self.asset_column],
-            how="inner",
-        )
-        merged.sort_values([self.date_column, self.asset_column], inplace=True)
-        merged = self._compute_targets(merged)
-        merged.sort_values([self.date_column, self.asset_column], inplace=True)
-        merged.set_index([self.date_column, self.asset_column], inplace=True)
-        merged.index = pd.MultiIndex.from_arrays(
+        df = self._load_factors()
+
+        df.sort_values([self.date_column, self.asset_column], inplace=True)
+        df = self._compute_targets(df)
+
+        df.sort_values([self.date_column, self.asset_column], inplace=True)
+        df.set_index([self.date_column, self.asset_column], inplace=True)
+        df.index = pd.MultiIndex.from_arrays(
             [
-                pd.to_datetime(merged.index.get_level_values(0)),
-                merged.index.get_level_values(1),
+                pd.to_datetime(df.index.get_level_values(0)),
+                df.index.get_level_values(1),
             ],
             names=[self.date_column, self.asset_column],
         )
-        merged.sort_index(level=[0, 1], inplace=True)
-        return merged
+        df.sort_index(level=[0, 1], inplace=True)
+        return df
 
     def trading_calendar(self, data: Optional[pd.DataFrame] = None) -> Iterable[pd.Timestamp]:
         if data is None:
@@ -88,7 +84,8 @@ class DataLoader:
 
         中文说明：从 Parquet 文件载入因子数据并格式化日期和代码类型。
         """
-        factors = pd.read_parquet(self.factor_path)
+        import polars as pl
+        factors = pl.read_parquet(self.factor_path).to_pandas()
         factors[self.date_column] = pd.to_datetime(factors[self.date_column])
         factors[self.asset_column] = factors[self.asset_column].astype(str)
         return factors

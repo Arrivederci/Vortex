@@ -60,7 +60,11 @@ def test_run_workflow_end_to_end(tmp_path: Path):
         "data_sources": {
             "factor_path": str(factor_path),
             "ohlc_path": str(ohlc_dir),
-            "target_return": {"period": 5, "type": "forward_return"},
+            "target_return": {
+                "period": 5,
+                "type": "forward_return",
+                "standardization": {"method": "rank", "params": {"center": True}},
+            },
         },
         "dataset_manager": {
             "walk_forward": {

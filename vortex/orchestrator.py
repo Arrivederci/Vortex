@@ -155,6 +155,9 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
         model_trainer.save_model(info["train_end"])
 
     evaluation_df = pd.concat(evaluation_rows, ignore_index=True)
-    performance_cfg = PerformanceConfig(**config["performance_analyzer"])
+    performance_section = dict(config["performance_analyzer"])
+    if not performance_section.get("holding_period"):
+        performance_section["holding_period"] = target_cfg.period
+    performance_cfg = PerformanceConfig(**performance_section)
     analyzer = PerformanceAnalyzer(performance_cfg, output_dir=output_dir)
     return analyzer.evaluate(evaluation_df)

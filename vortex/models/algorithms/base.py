@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import inspect
 import pathlib
 from abc import ABC, abstractmethod
 from typing import Any, Type
@@ -45,6 +47,31 @@ class BaseModel(ABC):
         中文说明：利用 joblib 将模型对象保存到文件中。
         """
         joblib.dump(self, path)
+
+    # 中文说明：以下两个魔术方法用于在序列化过程中剔除无法被 pickle 的模块对象，
+    # 并在反序列化时自动重新导入，确保模型在加载后仍具备相同功能。
+    _MODULE_STATE_KEY = "__base_model_module_state__"
+
+    def __getstate__(self) -> dict[str, Any]:
+        """Customize pickling to exclude non-serializable modules."""
+
+        state = self.__dict__.copy()
+        module_state: dict[str, str] = {}
+        for name, value in list(state.items()):
+            if inspect.ismodule(value):
+                module_state[name] = value.__name__
+                state.pop(name)
+        if module_state:
+            state[self._MODULE_STATE_KEY] = module_state
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        """Restore pickled state and re-import modules when necessary."""
+
+        module_state = state.pop(self._MODULE_STATE_KEY, {})
+        self.__dict__.update(state)
+        for name, module_name in module_state.items():
+            self.__dict__[name] = importlib.import_module(module_name)
 
     @classmethod
     def load(cls: Type["BaseModel"], path: str | pathlib.Path) -> "BaseModel":

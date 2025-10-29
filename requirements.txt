@@ -7,3 +7,4 @@ pytest
 pyyaml
 pyarrow
 tqdm
+lightgbm

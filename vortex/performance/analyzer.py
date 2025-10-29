@@ -16,12 +16,13 @@ from sklearn.metrics import r2_score
 class PerformanceConfig:
     """Configuration for performance evaluation.
 
-    中文说明：配置绩效分析所需的分位数数量、无风险利率等参数。
+    中文说明：配置绩效分析所需的分位数数量、无风险利率以及持有期长度等参数。
     """
 
     quantiles: int = 5
     risk_free_rate: float = 0.0
     group_by_columns: Optional[List[str]] = None
+    holding_period: int = 1
 
 
 class PerformanceAnalyzer:
@@ -70,15 +71,15 @@ class PerformanceAnalyzer:
     def _compute_rank_ic(self, df: pd.DataFrame) -> pd.Series:
         """Calculate daily Rank IC series.
 
-        中文说明：逐日计算预测与目标之间的秩相关系数。
+        中文说明：逐日计算预测与原始收益之间的秩相关系数。
         """
 
         ic_values = []
         dates = []
         for dt, group in df.groupby("datetime"):
-            if group["prediction"].nunique() <= 1 or group["target_return"].nunique() <= 1:
+            if group["prediction"].nunique() <= 1 or group["period_return"].nunique() <= 1:
                 continue
-            corr = group["prediction"].corr(group["target_return"], method="spearman")
+            corr = group["prediction"].corr(group["period_return"], method="spearman")
             if pd.notna(corr):
                 ic_values.append(corr)
                 dates.append(dt)
@@ -87,29 +88,30 @@ class PerformanceAnalyzer:
     def _compute_r2(self, df: pd.DataFrame) -> pd.Series:
         """Compute daily coefficient of determination.
 
-        中文说明：对每个交易日计算预测与真实值的 R² 指标。
+        中文说明：对每个交易日计算预测与原始收益值的 R² 指标。
         """
 
         scores = []
         dates = []
         for dt, group in df.groupby("datetime"):
-            valid = group[["target_return", "prediction"]].dropna()
+            valid = group[["period_return", "prediction"]].dropna()
             if valid.empty:
                 continue
-            if valid["prediction"].nunique() <= 1 or valid["target_return"].nunique() <= 1:
+            if valid["prediction"].nunique() <= 1 or valid["period_return"].nunique() <= 1:
                 continue
             # 先移除缺失值并确保目标存在波动，避免 R² 计算返回 NaN。
-            scores.append(r2_score(valid["target_return"], valid["prediction"]))
+            scores.append(r2_score(valid["period_return"], valid["prediction"]))
             dates.append(dt)
         return pd.Series(scores, index=pd.DatetimeIndex(dates), name="r2")
 
     def _compute_quantile_returns(self, df: pd.DataFrame) -> Dict[str, Dict[str, pd.Series]]:
         """Compute quantile portfolio returns and statistics.
 
-        中文说明：构建分位数组合并计算日收益、累计收益及年化表现。
+        中文说明：构建分位数组合并计算分组收益，基于持有期模拟实际开仓节奏。
         """
 
         q = self.config.quantiles
+        holding_period = max(1, int(self.config.holding_period or 1))
         df = df.copy()
 
         def assign_quantiles(series: pd.Series) -> pd.Series:
@@ -128,19 +130,46 @@ class PerformanceAnalyzer:
             .unstack("quantile")
         )
         quantile_daily = quantile_daily.reindex(columns=range(1, q + 1))
-        quantile_daily = quantile_daily.sort_index().fillna(0.0)
-        cumulative = (1 + quantile_daily).cumprod()
-        annual_returns = {
-            f"quantile_{int(col)}_annual_return": float((1 + quantile_daily[col].mean()) ** 252 - 1)
-            for col in quantile_daily.columns
-        }
-        long_short = quantile_daily[q] - quantile_daily[1]
-        annual_returns["long_short_annual_return"] = float((1 + long_short.mean()) ** 252 - 1)
+        quantile_daily = quantile_daily.sort_index().fillna(0.0).astype(float)
+
+        if quantile_daily.empty:
+            periodic_returns = quantile_daily.copy()
+        else:
+            # 中文说明：仅在每个持有期起点开仓一次，期间保持仓位不变。
+            rebalance_positions = np.arange(0, len(quantile_daily), holding_period, dtype=int)
+            periodic_returns = quantile_daily.iloc[rebalance_positions].copy()
+
+        cumulative = pd.DataFrame(index=quantile_daily.index, columns=quantile_daily.columns, dtype=float)
+        if not periodic_returns.empty:
+            cumulative_periodic = (1 + periodic_returns).cumprod()
+            cumulative = cumulative_periodic.reindex(quantile_daily.index, method="ffill")
+        cumulative = cumulative.fillna(1.0)
+
+        periods_per_year = 252 / holding_period if holding_period else 252.0
+        annual_returns: Dict[str, float] = {}
+        for col in quantile_daily.columns:
+            series = periodic_returns[col]
+            if series.empty:
+                annual_returns[f"quantile_{int(col)}_annual_return"] = float("nan")
+            else:
+                annual_returns[f"quantile_{int(col)}_annual_return"] = float(
+                    (1 + series.mean()) ** periods_per_year - 1
+                )
+
+        long_short_periodic = periodic_returns[q] - periodic_returns[1]
+        if long_short_periodic.empty:
+            annual_returns["long_short_annual_return"] = float("nan")
+        else:
+            annual_returns["long_short_annual_return"] = float(
+                (1 + long_short_periodic.mean()) ** periods_per_year - 1
+            )
+
         return {
             "daily": quantile_daily,
+            "periodic": periodic_returns,
             "cumulative": cumulative,
             "annual_returns": annual_returns,
-            "long_short_series": long_short,
+            "long_short_series": long_short_periodic,
         }
 
     def _compute_portfolio_metrics(self, quantile_results: Dict[str, Dict[str, pd.Series]]) -> Dict[str, float]:
@@ -151,25 +180,71 @@ class PerformanceAnalyzer:
 
         risk_free = self.config.risk_free_rate
         metrics = {}
-        quantile_daily = quantile_results["daily"]
+        quantile_periodic = quantile_results["periodic"]
         long_short = quantile_results["long_short_series"]
-        top_quantile = quantile_daily[quantile_daily.columns[-1]]
-        metrics.update(self._portfolio_stats(top_quantile, prefix="top_quantile", risk_free=risk_free))
-        metrics.update(self._portfolio_stats(long_short, prefix="long_short", risk_free=risk_free))
+        if quantile_periodic.empty:
+            return {
+                "top_quantile_annual_return": float("nan"),
+                "top_quantile_annual_volatility": float("nan"),
+                "top_quantile_sharpe_ratio": float("nan"),
+                "top_quantile_max_drawdown": float("nan"),
+                "top_quantile_turnover": float("nan"),
+                "long_short_annual_return": float("nan"),
+                "long_short_annual_volatility": float("nan"),
+                "long_short_sharpe_ratio": float("nan"),
+                "long_short_max_drawdown": float("nan"),
+                "long_short_turnover": float("nan"),
+            }
+        top_quantile = quantile_periodic[quantile_periodic.columns[-1]]
+        metrics.update(
+            self._portfolio_stats(
+                top_quantile,
+                prefix="top_quantile",
+                risk_free=risk_free,
+                holding_period=self.config.holding_period,
+            )
+        )
+        metrics.update(
+            self._portfolio_stats(
+                long_short,
+                prefix="long_short",
+                risk_free=risk_free,
+                holding_period=self.config.holding_period,
+            )
+        )
         return metrics
 
-    def _portfolio_stats(self, series: pd.Series, prefix: str, risk_free: float) -> Dict[str, float]:
+    def _portfolio_stats(
+        self, series: pd.Series, prefix: str, risk_free: float, holding_period: int
+    ) -> Dict[str, float]:
         """Compute annualized return, volatility, Sharpe, drawdown, and turnover.
 
         中文说明：计算组合的年化收益、波动率、夏普比率、最大回撤与换手率。
         """
 
-        mean_daily = series.mean()
-        vol_daily = series.std(ddof=1)
-        annual_return = (1 + mean_daily) ** 252 - 1
-        annual_vol = vol_daily * np.sqrt(252)
-        sharpe = (mean_daily * 252 - risk_free) / annual_vol if annual_vol else float("nan")
-        cum = (1 + series).cumprod()
+        holding_period = max(1, int(holding_period or 1))
+        valid = series.dropna()
+        if valid.empty:
+            return {
+                f"{prefix}_annual_return": float("nan"),
+                f"{prefix}_annual_volatility": float("nan"),
+                f"{prefix}_sharpe_ratio": float("nan"),
+                f"{prefix}_max_drawdown": float("nan"),
+                f"{prefix}_turnover": float("nan"),
+            }
+
+        mean_periodic = float(valid.mean())
+        vol_periodic = float(valid.std(ddof=1))
+        periods_per_year = 252 / holding_period if holding_period else 252.0
+        annual_return = (1 + mean_periodic) ** periods_per_year - 1
+        annual_vol = vol_periodic * np.sqrt(periods_per_year) if not np.isnan(vol_periodic) else float("nan")
+        risk_free_periodic = (1 + risk_free) ** (holding_period / 252) - 1
+        if np.isnan(vol_periodic) or vol_periodic == 0.0:
+            sharpe = float("nan")
+        else:
+            sharpe = ((mean_periodic - risk_free_periodic) / vol_periodic) * np.sqrt(periods_per_year)
+
+        cum = (1 + series.fillna(0.0)).cumprod()
         running_max = cum.cummax()
         drawdown = (cum - running_max) / running_max
         turnover = self._compute_turnover(series)

@@ -113,6 +113,7 @@ print(metrics)
   - `type`：目前支持 `forward_return`；
   - `entry_price_column`/`exit_price_column`：自定义开/平仓价格列；
   - `entry_shift`/`exit_shift`：控制买入、卖出相对当前日期的偏移。
+  - `standardization`：可选目标标准化配置，例如 `{"method": "rank"}` 将在截面上执行秩标准化。
 
 ### dataset_manager
 - `walk_forward`：定义滚动训练窗口。

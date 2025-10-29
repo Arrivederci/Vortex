@@ -16,18 +16,20 @@ def _prepare_sample_data(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.
     dates = pd.date_range("2024-01-01", periods=6, freq="B")
     assets = ["1"] * len(dates)
 
+    open_prices = pd.Series([10.0, 10.2, 10.4, 10.8, 11.0, 11.5], index=dates)
+    close_prices = pd.Series([10.1, 10.3, 10.5, 10.9, 11.2, 11.6], index=dates)
+
     factors = pd.DataFrame(
         {
             "交易日期": dates,
             "股票代码": assets,
             "测试因子": range(len(dates)),
+            "收盘价_复权": close_prices.values,
+            "开盘价_复权": open_prices.values,
         }
     )
     factor_path = tmp_path / "factors.parquet"
     factors.to_parquet(factor_path)
-
-    open_prices = pd.Series([10.0, 10.2, 10.4, 10.8, 11.0, 11.5], index=dates)
-    close_prices = pd.Series([10.1, 10.3, 10.5, 10.9, 11.2, 11.6], index=dates)
 
     market = pd.DataFrame(
         {
@@ -88,3 +90,54 @@ def test_forward_return_open_to_open(tmp_path: pathlib.Path) -> None:
         (first_date, "1"),
         "period_return",
     ]
+
+
+def test_target_standardization_rank(tmp_path: pathlib.Path) -> None:
+    """验证秩标准化能够在截面维度正确转换收益率。"""
+
+    dates = pd.date_range("2024-01-01", periods=4, freq="B")
+    price_map = {
+        "A": [10.0, 11.0, 12.0, 13.0],
+        "B": [10.0, 12.0, 14.0, 16.0],
+        "C": [10.0, 10.5, 11.0, 11.5],
+    }
+    records = []
+    for asset, prices in price_map.items():
+        for date, price in zip(dates, prices):
+            records.append(
+                {
+                    "交易日期": date,
+                    "股票代码": asset,
+                    "收盘价_复权": price,
+                    "开盘价_复权": price,
+                    "测试因子": price,
+                }
+            )
+    factors = pd.DataFrame(records)
+    factor_path = tmp_path / "rank_factors.parquet"
+    factors.to_parquet(factor_path)
+
+    loader = DataLoader(
+        factor_path=factor_path,
+        ohlc_path=tmp_path,
+        target_config=TargetConfig(
+            period=1,
+            standardization={"method": "rank", "params": {"center": True}},
+        ),
+    )
+    result = loader.load()
+
+    first_date = dates[0]
+    expected_raw = {
+        "A": price_map["A"][1] / price_map["A"][0] - 1,
+        "B": price_map["B"][1] / price_map["B"][0] - 1,
+        "C": price_map["C"][1] / price_map["C"][0] - 1,
+    }
+    expected_rank = {
+        "A": pytest.approx(2 / 3 - 0.5),
+        "B": pytest.approx(1.0 - 0.5),
+        "C": pytest.approx(1 / 3 - 0.5),
+    }
+    for asset, raw_return in expected_raw.items():
+        assert pytest.approx(raw_return) == result.loc[(first_date, asset), "period_return"]
+        assert expected_rank[asset] == result.loc[(first_date, asset), "target_return"]

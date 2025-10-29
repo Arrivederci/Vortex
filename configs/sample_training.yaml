@@ -16,6 +16,10 @@ data_sources:
     exit_price_column: null  # 选填：平仓价列名，缺省时采用 close_column。
     entry_shift: 0  # 选填：建仓相对于当前行的偏移，默认 0 表示当日建仓。
     exit_shift: null  # 选填：平仓相对于当前行的偏移，缺省时等于 entry_shift + period。
+    standardization:
+      method: "rank"  # 选填：目标标准化方法，可选 none/rank。
+      params:
+        center: true  # 选填：是否在秩标准化后进行居中处理。
 
 # 数据集划分配置
 # 必填：控制走一步检验与内层交叉验证的切分方式。

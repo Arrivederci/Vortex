@@ -161,3 +161,102 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
     performance_cfg = PerformanceConfig(**performance_section)
     analyzer = PerformanceAnalyzer(performance_cfg, output_dir=output_dir)
     return analyzer.evaluate(evaluation_df)
+
+
+def run_prediction_workflow(config_path: str) -> pathlib.Path:
+    """Generate out-of-sample predictions using persisted models.
+
+    中文说明：
+        1. 读取预测配置与原始因子数据，构建与训练阶段一致的滚动窗口；
+        2. 基于训练阶段保存的模型与预处理器，仅执行特征流水线拟合与模型推理；
+        3. 将样本外预测结果整理为 ``[交易日期，股票代码，factor_{模型名}]`` 列并保存为 pkl。
+    """
+
+    config = ConfigLoader(config_path).load()
+
+    if "prediction" not in config:
+        raise KeyError("配置文件缺少 prediction 段落，无法执行预测流程。")
+
+    prediction_cfg = config["prediction"]
+    model_name = prediction_cfg.get("model_name")
+    if not model_name:
+        raise ValueError("prediction.model_name 为必填字段，用于定位模型与命名预测列。")
+
+    artifacts_path = prediction_cfg.get("artifacts_path")
+    if not artifacts_path:
+        raise ValueError("prediction.artifacts_path 为必填字段，用于读取训练阶段保存的模型文件。")
+    artifacts_dir = pathlib.Path(artifacts_path)
+
+    filename_template = prediction_cfg.get("filename_template")
+    if not filename_template:
+        raise ValueError("prediction.filename_template 为必填字段，用于拼接模型文件名。")
+
+    output_path_value = prediction_cfg.get("output_path", "./artifacts/predictions.pkl")
+    output_path = pathlib.Path(output_path_value)
+
+    target_cfg = TargetConfig(**config["data_sources"]["target_return"])
+    loader = DataLoader(
+        factor_path=config["data_sources"]["factor_path"],
+        ohlc_path=config["data_sources"]["ohlc_path"],
+        target_config=target_cfg,
+    )
+    data = loader.load()
+    trading_calendar = loader.trading_calendar()
+
+    wf_cfg = WalkForwardConfig(**config["dataset_manager"]["walk_forward"])
+    dataset_manager = DatasetManager(wf_cfg, trading_calendar)
+
+    pipeline_cfg = config["feature_selector"]["pipeline"]
+
+    prediction_frames: List[pd.DataFrame] = []
+    feature_columns = [col for col in data.columns if col.startswith("factor_")]
+
+    for train_X, train_y, test_X, _test_y, info in dataset_manager.generate_splits(
+        data,
+        feature_columns=feature_columns,
+    ):
+        feature_pipeline = build_pipeline(pipeline_cfg, SELECTOR_REGISTRY)
+        # 中文说明：虽然预测阶段无需训练模型，但仍需拟合特征流水线以与训练阶段保持一致。
+        feature_pipeline.fit_transform(train_X, train_y)
+        test_features = feature_pipeline.transform(test_X)
+
+        formatted_date = info["train_end"].strftime("%Y%m%d")
+        model_filename = filename_template.format(
+            model_name=model_name,
+            train_end_date=formatted_date,
+        )
+        model_path = artifacts_dir / f"{model_filename}.joblib"
+        preprocessor_path = artifacts_dir / f"{model_filename}_preprocessor.joblib"
+
+        if not model_path.exists():
+            raise FileNotFoundError(f"找不到模型文件：{model_path}")
+        if not preprocessor_path.exists():
+            raise FileNotFoundError(f"找不到预处理器文件：{preprocessor_path}")
+
+        model, preprocessor = ModelTrainer.load_model(model_path, preprocessor_path)
+        processed_test = preprocessor.transform(test_features)
+        predictions = model.predict(processed_test)
+
+        if not isinstance(predictions, pd.Series):
+            # 中文说明：部分模型可能返回 ndarray，此处统一转换为带索引的序列，确保后续对齐。
+            predictions = pd.Series(predictions, index=processed_test.index)
+
+        prediction_frame = pd.DataFrame(
+            {
+                loader.date_column: processed_test.index.get_level_values(0),
+                loader.asset_column: processed_test.index.get_level_values(1),
+                f"factor_{model_name}": predictions.values,
+            }
+        )
+        prediction_frames.append(prediction_frame)
+
+    if not prediction_frames:
+        raise ValueError("数据切分结果为空，预测流程无法生成任何测试样本。")
+
+    prediction_df = pd.concat(prediction_frames, ignore_index=True)
+    prediction_df.sort_values([loader.date_column, loader.asset_column], inplace=True)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    prediction_df.to_pickle(output_path)
+
+    return output_path

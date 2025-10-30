@@ -121,6 +121,7 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
     inner_cv_cfg = config["dataset_manager"].get("inner_cv", {})
 
     evaluation_rows: List[pd.DataFrame] = []
+    feature_importance_frames: List[pd.DataFrame] = []
     for train_X, train_y, test_X, test_y, info in dataset_manager.generate_splits(data, feature_columns=[col for col in data.columns if col.startswith("factor_")]):
         best_params = _tune_hyperparameters(
             dataset_manager,
@@ -142,12 +143,25 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
         model_trainer.fit(train_features, train_y)
         predictions = model_trainer.predict(test_features)
 
+        importance_series = model_trainer.get_feature_importances()
+        if not importance_series.empty:
+            # 中文说明：将每次滚动窗口的特征重要性记录下来，供绩效分析生成时序图表。
+            feature_importance_frames.append(
+                pd.DataFrame(
+                    {
+                        "datetime": info["test_end"],
+                        "feature": importance_series.index,
+                        "importance": importance_series.values,
+                    }
+                )
+            )
+
         evaluation = pd.DataFrame(
             {
                 "datetime": test_features.index.get_level_values(0),
                 "asset_id": test_features.index.get_level_values(1),
                 "prediction": predictions.values,
-                "target_return": test_y.values,
+                "target_return": test_y.loc[test_features.index].values,
                 "period_return": data.loc[test_features.index, "period_return"].values,
             }
         )
@@ -155,12 +169,17 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
         model_trainer.save_model(info["train_end"])
 
     evaluation_df = pd.concat(evaluation_rows, ignore_index=True)
+    feature_importance_df = (
+        pd.concat(feature_importance_frames, ignore_index=True)
+        if feature_importance_frames
+        else pd.DataFrame(columns=["datetime", "feature", "importance"])
+    )
     performance_section = dict(config["performance_analyzer"])
     if not performance_section.get("holding_period"):
         performance_section["holding_period"] = target_cfg.period
     performance_cfg = PerformanceConfig(**performance_section)
     analyzer = PerformanceAnalyzer(performance_cfg, output_dir=output_dir)
-    return analyzer.evaluate(evaluation_df)
+    return analyzer.evaluate(evaluation_df, feature_importances=feature_importance_df)
 
 
 def run_prediction_workflow(config_path: str) -> pathlib.Path:
@@ -209,9 +228,11 @@ def run_prediction_workflow(config_path: str) -> pathlib.Path:
     pipeline_cfg = config["feature_selector"]["pipeline"]
 
     prediction_frames: List[pd.DataFrame] = []
+    evaluation_rows: List[pd.DataFrame] = []
+    feature_importance_frames: List[pd.DataFrame] = []
     feature_columns = [col for col in data.columns if col.startswith("factor_")]
 
-    for train_X, train_y, test_X, _test_y, info in dataset_manager.generate_splits(
+    for train_X, train_y, test_X, test_y, info in dataset_manager.generate_splits(
         data,
         feature_columns=feature_columns,
     ):
@@ -250,6 +271,30 @@ def run_prediction_workflow(config_path: str) -> pathlib.Path:
         )
         prediction_frames.append(prediction_frame)
 
+        evaluation_rows.append(
+            pd.DataFrame(
+                {
+                    "datetime": processed_test.index.get_level_values(0),
+                    "asset_id": processed_test.index.get_level_values(1),
+                    "prediction": predictions.values,
+                    "target_return": test_y.loc[processed_test.index].values,
+                    "period_return": data.loc[processed_test.index, "period_return"].values,
+                }
+            )
+        )
+
+        importance_series = ModelTrainer.extract_feature_importances(model, processed_test.columns)
+        if not importance_series.empty:
+            feature_importance_frames.append(
+                pd.DataFrame(
+                    {
+                        "datetime": info["test_end"],
+                        "feature": importance_series.index,
+                        "importance": importance_series.values,
+                    }
+                )
+            )
+
     if not prediction_frames:
         raise ValueError("数据切分结果为空，预测流程无法生成任何测试样本。")
 
@@ -258,5 +303,28 @@ def run_prediction_workflow(config_path: str) -> pathlib.Path:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     prediction_df.to_pickle(output_path)
+
+    if evaluation_rows:
+        evaluation_df = pd.concat(evaluation_rows, ignore_index=True)
+        feature_importance_df = (
+            pd.concat(feature_importance_frames, ignore_index=True)
+            if feature_importance_frames
+            else pd.DataFrame(columns=["datetime", "feature", "importance"])
+        )
+
+        performance_section = dict(config.get("performance_analyzer", {}))
+        if not performance_section.get("holding_period"):
+            performance_section["holding_period"] = target_cfg.period
+        performance_cfg = PerformanceConfig(**performance_section)
+
+        performance_dir_value = prediction_cfg.get("performance_output_path")
+        if performance_dir_value:
+            performance_dir = pathlib.Path(performance_dir_value)
+        else:
+            performance_dir = output_path.parent / "performance"
+        performance_dir.mkdir(parents=True, exist_ok=True)
+
+        analyzer = PerformanceAnalyzer(performance_cfg, output_dir=str(performance_dir))
+        analyzer.evaluate(evaluation_df, feature_importances=feature_importance_df)
 
     return output_path

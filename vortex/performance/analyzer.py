@@ -1,5 +1,5 @@
-from __future__ import annotations
 """绩效分析模块，负责评估模型预测结果并生成报表。"""
+from __future__ import annotations
 
 import json
 import pathlib
@@ -41,7 +41,11 @@ class PerformanceAnalyzer:
         self.output_dir = pathlib.Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def evaluate(self, results: pd.DataFrame) -> Dict[str, float]:
+    def evaluate(
+        self,
+        results: pd.DataFrame,
+        feature_importances: Optional[pd.DataFrame] = None,
+    ) -> Dict[str, float]:
         """Evaluate model performance metrics.
 
         中文说明：计算 Rank IC、R²、分位组合收益等指标并输出字典。
@@ -65,7 +69,11 @@ class PerformanceAnalyzer:
         metrics.update(portfolio_metrics)
 
         self._save_results(metrics)
-        self._save_report(ic_series, quantile_returns["cumulative"])
+        self._save_report(
+            ic_series,
+            quantile_returns["cumulative"],
+            feature_importances=feature_importances,
+        )
         return metrics
 
     def _compute_rank_ic(self, df: pd.DataFrame) -> pd.Series:
@@ -91,18 +99,64 @@ class PerformanceAnalyzer:
         中文说明：对每个交易日计算预测与原始收益值的 R² 指标。
         """
 
-        scores = []
+        use_rank_target = self._should_use_rank_target(df)
+        scores: List[float] = []
         dates = []
         for dt, group in df.groupby("datetime"):
-            valid = group[["period_return", "prediction"]].dropna()
+            target_series = self._select_r2_target(group, use_rank_target)
+            valid = pd.concat([target_series, group["prediction"]], axis=1).dropna()
             if valid.empty:
                 continue
-            if valid["prediction"].nunique() <= 1 or valid["period_return"].nunique() <= 1:
+            if valid["prediction"].nunique() <= 1 or valid.iloc[:, 0].nunique() <= 1:
                 continue
-            # 先移除缺失值并确保目标存在波动，避免 R² 计算返回 NaN。
-            scores.append(r2_score(valid["period_return"], valid["prediction"]))
+            # 中文说明：确保目标与预测均存在波动，再计算逐日 R²。
+            scores.append(r2_score(valid.iloc[:, 0], valid["prediction"]))
             dates.append(dt)
         return pd.Series(scores, index=pd.DatetimeIndex(dates), name="r2")
+
+    def _should_use_rank_target(self, df: pd.DataFrame) -> bool:
+        """Determine whether rank-standardized targets are available."""
+
+        # 中文说明：若 ``target_return`` 与 ``period_return`` 差异明显，说明目标经过秩标准化。
+        if "target_return" not in df.columns or df["target_return"].isna().all():
+            return False
+        period = df.get("period_return")
+        if period is None or period.isna().all():
+            return False
+        period_values = period.astype(float).to_numpy()
+        target_values = df["target_return"].astype(float).to_numpy()
+        mask = np.isfinite(period_values) & np.isfinite(target_values)
+        if not mask.any():
+            return False
+        return not np.allclose(period_values[mask], target_values[mask], atol=1e-8)
+
+    def _select_r2_target(self, group: pd.DataFrame, use_rank_target: bool) -> pd.Series:
+        """Select appropriate target series for R² calculation."""
+
+        # 中文说明：优先使用秩标准化后的目标；若预测结果呈现秩特征则对原收益做秩转换。
+        if use_rank_target and "target_return" in group.columns:
+            return group["target_return"].astype(float)
+
+        prediction = group["prediction"].astype(float)
+        if self._looks_like_rank(prediction):
+            ranked = group["period_return"].rank(method="average", pct=True)
+            if prediction.min() < 0:
+                ranked = ranked - 0.5
+            return ranked.astype(float)
+        return group["period_return"].astype(float)
+
+    @staticmethod
+    def _looks_like_rank(series: pd.Series) -> bool:
+        """Heuristic check whether a series resembles rank-standardized values."""
+
+        values = series.dropna().astype(float)
+        if values.empty or values.nunique() <= 1:
+            return False
+        min_val = float(values.min())
+        max_val = float(values.max())
+        within_zero_one = min_val >= -1e-6 and max_val <= 1 + 1e-6
+        within_centered = min_val >= -0.5 - 1e-6 and max_val <= 0.5 + 1e-6
+        return within_zero_one or within_centered
 
     def _compute_quantile_returns(self, df: pd.DataFrame) -> Dict[str, Dict[str, pd.Series]]:
         """Compute quantile portfolio returns and statistics.
@@ -276,26 +330,76 @@ class PerformanceAnalyzer:
         with path.open("w", encoding="utf-8") as fp:
             json.dump(metrics, fp, indent=2, ensure_ascii=False)
 
-    def _save_report(self, ic_series: pd.Series, cumulative_quantiles: pd.DataFrame) -> None:
+    def _save_report(
+        self,
+        ic_series: pd.Series,
+        cumulative_quantiles: pd.DataFrame,
+        feature_importances: Optional[pd.DataFrame] = None,
+    ) -> None:
         """Generate interactive HTML report for metrics.
 
-        中文说明：使用 Plotly 生成 Rank IC 与分位数组合的可视化报表。
+        中文说明：使用 Plotly 生成累计 Rank IC、分位数组合与特征重要性可视化报表。
         """
 
+        cumulative_ic = ic_series.cumsum()
         fig_ic = go.Figure()
-        fig_ic.add_trace(go.Scatter(x=ic_series.index, y=ic_series.values, mode="lines", name="Rank IC"))
-        fig_ic.update_layout(title="Rank IC over time", xaxis_title="Date", yaxis_title="Rank IC")
+        fig_ic.add_trace(
+            go.Scatter(
+                x=cumulative_ic.index,
+                y=cumulative_ic.values,
+                mode="lines",
+                name="Cumulative Rank IC",
+            )
+        )
+        fig_ic.update_layout(
+            title="Cumulative Rank IC",
+            xaxis_title="Date",
+            yaxis_title="Cumulative Rank IC",
+        )
 
         fig_quantiles = go.Figure()
         for col in cumulative_quantiles.columns:
             fig_quantiles.add_trace(
                 go.Scatter(x=cumulative_quantiles.index, y=cumulative_quantiles[col], mode="lines", name=f"Q{col}")
             )
-        fig_quantiles.update_layout(title="Quantile cumulative returns", xaxis_title="Date", yaxis_title="Cumulative")
+        fig_quantiles.update_layout(
+            title="Quantile cumulative returns",
+            xaxis_title="Date",
+            yaxis_title="Cumulative",
+        )
+
+        fig_importance_html = ""
+        if feature_importances is not None and not feature_importances.empty:
+            sorted_importances = feature_importances.copy()
+            sorted_importances["datetime"] = pd.to_datetime(sorted_importances["datetime"])
+            sorted_importances.sort_values(["feature", "datetime"], inplace=True)
+            fig_importance = go.Figure()
+            for feature, group in sorted_importances.groupby("feature"):
+                fig_importance.add_trace(
+                    go.Scatter(
+                        x=group["datetime"],
+                        y=group["importance"],
+                        mode="lines+markers",
+                        name=str(feature),
+                        text=[f"{val:.4f}" for val in group["importance"]],
+                        hovertemplate="日期=%{x|%Y-%m-%d}<br>特征=%{name}<br>重要性=%{y:.4f}<extra></extra>",
+                    )
+                )
+            fig_importance.update_layout(
+                title="Feature importance over time",
+                xaxis_title="Date",
+                yaxis_title="Importance",
+            )
+            fig_importance_html = fig_importance.to_html(full_html=False, include_plotlyjs=False)
 
         report_path = self.output_dir / "report.html"
         with report_path.open("w", encoding="utf-8") as fp:
             fp.write("<html><head><title>Performance Report</title></head><body>")
             fp.write(fig_ic.to_html(full_html=False, include_plotlyjs="cdn"))
             fp.write(fig_quantiles.to_html(full_html=False, include_plotlyjs=False))
+            if fig_importance_html:
+                fp.write(fig_importance_html)
             fp.write("</body></html>")
+
+
+__all__ = ["PerformanceAnalyzer", "PerformanceConfig"]

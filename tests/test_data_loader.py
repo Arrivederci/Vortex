@@ -141,3 +141,48 @@ def test_target_standardization_rank(tmp_path: pathlib.Path) -> None:
     for asset, raw_return in expected_raw.items():
         assert pytest.approx(raw_return) == result.loc[(first_date, asset), "period_return"]
         assert expected_rank[asset] == result.loc[(first_date, asset), "target_return"]
+
+
+def test_target_standardization_rank_integer(tmp_path: pathlib.Path) -> None:
+    """验证整数标签标准化可以生成排序学习所需的离散目标。"""
+
+    dates = pd.date_range("2024-01-01", periods=3, freq="B")
+    price_map = {
+        "A": [10.0, 11.0, 12.0],
+        "B": [10.0, 12.0, 14.0],
+        "C": [10.0, 10.5, 11.0],
+    }
+    records = []
+    for asset, prices in price_map.items():
+        for date, price in zip(dates, prices):
+            records.append(
+                {
+                    "交易日期": date,
+                    "股票代码": asset,
+                    "收盘价_复权": price,
+                    "开盘价_复权": price,
+                    "测试因子": price,
+                }
+            )
+    factors = pd.DataFrame(records)
+    factor_path = tmp_path / "rank_integer.parquet"
+    factors.to_parquet(factor_path)
+
+    loader = DataLoader(
+        factor_path=factor_path,
+        ohlc_path=tmp_path,
+        target_config=TargetConfig(
+            period=1,
+            standardization={
+                "method": "rank_integer",
+                "params": {"rank_method": "first", "higher_is_better": True},
+            },
+        ),
+    )
+    result = loader.load()
+
+    first_date = dates[0]
+    assert str(result["target_return"].dtype) == "Int64"
+    assert result.loc[(first_date, "B"), "target_return"] == 2
+    assert result.loc[(first_date, "A"), "target_return"] == 1
+    assert result.loc[(first_date, "C"), "target_return"] == 0

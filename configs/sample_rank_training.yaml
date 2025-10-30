@@ -1,0 +1,58 @@
+# Vortex 排序任务 LightGBMRanker 配置示例
+# 说明：该示例展示如何启用整数标签标准化与 LightGBM 排序模型，适用于截面选股等 Learning-to-Rank 场景。
+
+data_sources:
+  factor_path: "./data/factors/example_factors.parquet"  # 因子文件路径，需替换为实际文件。
+  ohlc_path: "./data/ohlc"  # 行情 CSV 目录，LightGBMRanker 仍可复用前瞻收益计算逻辑。
+  date_column: "交易日期"
+  asset_column: "股票代码"
+  target_return:
+    period: 5
+    type: "forward_return"
+    standardization:
+      method: "rank_integer"  # 关键：将截面收益转换为整数相关性标签。
+      params:
+        rank_method: "first"  # 同收益并列时按出现顺序分配标签，保证整数连续。
+        higher_is_better: true  # 大收益对应更大的标签值，与 LightGBM 排序目标一致。
+
+dataset_manager:
+  walk_forward:
+    start_date: "2019-01-01"
+    end_date: "2020-12-31"
+    train_window_type: "expanding"
+    train_length: 252
+    test_length: 21
+    step_length: 21
+    embargo_length: 5
+
+feature_selector:
+  pipeline:
+    - method: "rank_ic_filter"
+      params:
+        top_k: 80
+        min_icir: 0.3
+
+model:
+  preprocessor:
+    method: "rank"  # 排序任务常用对特征做截面排名归一化。
+    params: {}
+  name: "lightgbm_ranker"
+  params:
+    objective: "lambdarank"
+    metric: "ndcg"
+    n_estimators: 200
+    learning_rate: 0.05
+    num_leaves: 63
+    min_data_in_leaf: 5
+    colsample_bytree: 0.8
+    subsample: 0.8
+    random_state: 42
+  persistence:
+    enable: true
+    save_path: "./artifacts/models"
+    filename_template: "{model_name}_{train_end_date}"
+
+performance_analyzer:
+  quantiles: 5
+  risk_free_rate: 0.02
+  group_by_columns: []

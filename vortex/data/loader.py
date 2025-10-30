@@ -196,4 +196,29 @@ class DataLoader:
                 .transform(_rank_transform)
                 .astype(float)
             )
+        if method == "rank_integer":
+            rank_method = str(params.get("rank_method", "first"))
+            higher_is_better = bool(params.get("higher_is_better", True))
+
+            def _rank_to_int(group: pd.Series) -> pd.Series:
+                """Convert cross-sectional returns to integer relevance labels."""
+
+                # 中文说明：使用 Nullable 整数类型保留缺失值，确保后续 LightGBMRanker 可直接使用。
+                result = pd.Series(pd.NA, index=group.index, dtype="Int64")
+                valid_mask = group.notna()
+                if not valid_mask.any():
+                    return result
+                valid = group[valid_mask]
+                ascending = not higher_is_better
+                ranks = valid.rank(method=rank_method, ascending=ascending)
+                size = len(valid)
+                # 中文说明：以 ``size - ranks`` 将最优收益映射为最大标签，保持相关性强的样本拥有更高整数标签。
+                relevance = (size - ranks).astype(int)
+                result.loc[valid.index] = relevance.to_numpy()
+                return result
+
+            ranked = df.groupby(self.date_column, sort=False)["period_return"].transform(
+                _rank_to_int
+            )
+            return ranked.astype("Int64")
         raise ValueError(f"Unsupported target standardization method: {method}")

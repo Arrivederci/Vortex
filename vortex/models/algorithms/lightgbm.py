@@ -56,24 +56,66 @@ class LightGBMRankerModel(BaseModel):
         except ImportError as exc:  # pragma: no cover - optional dependency
             raise ImportError("LightGBM must be installed to use the LightGBM ranker") from exc
         self._lgb = lgb
-        self.model = lgb.LGBMRanker(**params)
+
+        # 中文说明：提取排序标签分组配置，剩余参数传递给 LightGBMRanker。
+        params_copy = dict(params)
+        self.relevance_grouping_cfg = params_copy.pop("relevance_grouping", None)
+        self.model = lgb.LGBMRanker(**params_copy)
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> "LightGBMRankerModel":
         """Fit the LightGBM ranker with automatically inferred group sizes."""
 
-        # 中文说明：排序模型需使用整数标签，训练前过滤缺失值并保持索引对齐。
+        # 中文说明：排序模型需基于收益生成离散等级标签，训练前过滤缺失值并保持索引对齐。
         X_filled = X.fillna(0.0)
         target = y.copy()
         valid_mask = target.notna()
         if not valid_mask.all():
             X_filled = X_filled.loc[valid_mask]
             target = target.loc[valid_mask]
+
+        if not isinstance(self.relevance_grouping_cfg, dict):
+            raise ValueError(
+                "LightGBMRanker requires 'relevance_grouping' configuration with 'num_groups'"
+            )
+
+        num_groups = int(self.relevance_grouping_cfg.get("num_groups", 0))
+        if num_groups <= 0:
+            raise ValueError("'num_groups' in relevance_grouping must be a positive integer")
+
+        raw_label_gain: List[float] | None = self.relevance_grouping_cfg.get("label_gain")
+        if raw_label_gain is not None and len(raw_label_gain) != num_groups:
+            raise ValueError(
+                "Length of 'label_gain' must equal 'num_groups' in relevance_grouping"
+            )
+
+        # 中文说明：若未显式给出 label_gain，则按照等级递增的重要性自动生成。
+        label_gain = (
+            [float(gain) for gain in raw_label_gain]
+            if raw_label_gain is not None
+            else [float(i) for i in range(num_groups)]
+        )
+
+        # 中文说明：根据收益的截面分位数生成组标签，保证同组样本获得相同等级。
+        ranks = target.rank(method="first", pct=True)
+        relevance_labels = ((ranks * num_groups) - 1e-12).astype("int64")
+        relevance_labels = relevance_labels.clip(lower=0, upper=num_groups - 1)
+
         group_sizes = self._infer_group_sizes(X_filled.index)
         if not group_sizes:
             raise ValueError("LGBMRanker requires at least one valid group for training")
-        target_int = target.astype("int64", copy=False)
+
+        if relevance_labels.size == 0:
+            raise ValueError("LGBMRanker received empty target after preprocessing")
+
         self.group_sizes_: List[int] = group_sizes
-        self.model.fit(X_filled, target_int.to_numpy(), group=group_sizes)
+        self.num_groups_: int = num_groups
+        self.label_gain_: List[float] = label_gain
+        self.relevance_grouping_ = {"num_groups": num_groups, "label_gain": label_gain}
+        self.relevance_labels_ = relevance_labels
+
+        # 中文说明：将 label_gain 通过 set_params 传递给 LightGBM 排序模型。
+        self.model.set_params(label_gain=label_gain)
+        self.model.fit(X_filled, relevance_labels.to_numpy(), group=group_sizes)
         return self
 
     def predict(self, X: pd.DataFrame) -> pd.Series:

@@ -104,11 +104,13 @@ def test_run_prediction_workflow(tmp_path: Path) -> None:
         "data_sources": train_config["data_sources"],
         "dataset_manager": train_config["dataset_manager"],
         "feature_selector": train_config["feature_selector"],
+        "performance_analyzer": train_config["performance_analyzer"],
         "prediction": {
             "model_name": "random_forest",
             "artifacts_path": str(tmp_path / "models"),
             "filename_template": "model_{train_end_date}",
             "output_path": str(tmp_path / "predictions.pkl"),
+            "performance_output_path": str(tmp_path / "prediction_performance"),
         },
     }
 
@@ -142,3 +144,11 @@ def test_run_prediction_workflow(tmp_path: Path) -> None:
 
     assert len(predictions) == expected_rows
     assert predictions["factor_random_forest"].notnull().all()
+
+    performance_dir = Path(predict_config["prediction"]["performance_output_path"])
+    report_path = performance_dir / "report.html"
+    results_path = performance_dir / "results.json"
+    assert report_path.exists()
+    assert results_path.exists()
+    report_content = report_path.read_text(encoding="utf-8")
+    assert "Feature importance over time" in report_content

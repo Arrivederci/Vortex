@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pathlib
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
+import numpy as np
 import pandas as pd
 
 from .algorithms.registry import get_model_class
@@ -55,7 +56,7 @@ class ModelTrainer:
         model_params = model_cfg.get("params", {})
         # 中文说明：通过注册表返回的模型类实例化模型，支持装饰器扩展的新模型。
         self.model = model_cls(**model_params)
-
+        
         persistence_cfg = model_cfg.get("persistence", {})
         if persistence_cfg.get("enable"):
             self.persistence = PersistenceConfig(
@@ -66,6 +67,7 @@ class ModelTrainer:
         else:
             self.persistence = PersistenceConfig(enable=False, save_path="", filename_template="")
         self.model_name = name
+        self.feature_names_: list[str] = []
 
     def fit(self, X: pd.DataFrame, y: pd.Series) -> None:
         """Fit the underlying model using processed features.
@@ -73,6 +75,8 @@ class ModelTrainer:
         中文说明：先执行特征预处理，再训练模型。
         """
         X_processed = self.preprocessor.fit_transform(X, y)
+        # 中文说明：记录预处理后的特征列顺序，便于后续提取特征重要性时对齐。
+        self.feature_names_ = list(X_processed.columns)
         self.model.fit(X_processed, y)
 
     def predict(self, X: pd.DataFrame) -> pd.Series:
@@ -115,3 +119,42 @@ class ModelTrainer:
         model = load(model_path)
         preprocessor = load(preprocessor_path)
         return model, preprocessor
+
+    def get_feature_importances(self) -> pd.Series:
+        """Return feature importance scores aligned with feature names."""
+
+        # 中文说明：根据模型提供的 ``feature_importances_`` 或 ``coef_`` 属性，
+        # 计算并返回与特征列顺序一致的重要性序列。
+        if not self.feature_names_:
+            return pd.Series(dtype=float)
+        return self.extract_feature_importances(self.model, self.feature_names_)
+
+    @staticmethod
+    def extract_feature_importances(model: Any, feature_names: Sequence[str]) -> pd.Series:
+        """Derive feature importance scores from a fitted model."""
+
+        # 中文说明：兼容树模型的 ``feature_importances_`` 属性以及线性模型的 ``coef_`` 系数，
+        # 当模型不提供重要性接口时返回空序列。
+        estimator = getattr(model, "model", model)
+        names = list(feature_names)
+        if not names:
+            return pd.Series(dtype=float)
+
+        importances: Optional[np.ndarray] = None
+        if hasattr(estimator, "feature_importances_"):
+            values = getattr(estimator, "feature_importances_")
+            importances = np.asarray(values, dtype=float).ravel()
+        elif hasattr(estimator, "coef_"):
+            values = getattr(estimator, "coef_")
+            coef = np.asarray(values, dtype=float)
+            if coef.ndim > 1:
+                coef = np.mean(np.abs(coef), axis=0)
+            else:
+                coef = np.abs(coef)
+            importances = coef.ravel()
+
+        if importances is None or importances.size != len(names):
+            return pd.Series(dtype=float)
+
+        series = pd.Series(importances, index=names, dtype=float)
+        return series.sort_index()

@@ -107,3 +107,6 @@ def test_run_workflow_end_to_end(tmp_path: Path):
     with results_path.open("r", encoding="utf-8") as fp:
         stored = json.load(fp)
     assert stored["quantile_5_annual_return"] == pytest.approx(metrics["quantile_5_annual_return"])
+    report_content = report_path.read_text(encoding="utf-8")
+    assert "Cumulative Rank IC" in report_content
+    assert "Feature importance over time" in report_content

@@ -163,7 +163,7 @@ class DatasetManager:
         """
         idx = IndexSlice[start_date:end_date, :]
         subset = data.loc[idx]
-        subset = subset.sort_index()
+        subset = subset.sort_index(level=[0, 1])
         features = feature_columns or [
             c for c in subset.columns if c not in {self.target_column, "period_return"}
         ]

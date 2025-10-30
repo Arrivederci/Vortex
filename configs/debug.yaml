@@ -4,7 +4,7 @@
 # 数据相关配置
 # 必填：用于指定因子与行情数据的来源，并定义目标收益计算方式。
 data_sources:
-  factor_path: "./data/selected_factors_kline.parquet"  # 必填：因子数据 Parquet 文件路径，必须存在。
+  factor_path: "./data/selected_factors_kline3.parquet"  # 必填：因子数据 Parquet 文件路径，必须存在。
   ohlc_path: "./data/ohlc"  # 必填：行情 CSV 文件所在目录，需包含至少一个 csv。
   date_column: "交易日期"  # 选填：日期列名称，如不填则使用默认值 "交易日期"。
   asset_column: "股票代码"  # 选填：资产代码列名称，默认 "股票代码"。
@@ -17,7 +17,7 @@ data_sources:
     entry_shift: 1  # 选填：建仓相对于当前行的偏移，默认 0 表示当日建仓。
     exit_shift: null  # 选填：平仓相对于当前行的偏移，缺省时等于 entry_shift + period。
     standardization:
-      method: "rank"  # 选填：目标标准化方法，可选 none/rank。
+      method: "none"  # 选填：目标标准化方法，可选 none/rank。
       params:
         center: false  # 选填：是否在秩标准化后进行居中处理。
 
@@ -25,10 +25,10 @@ data_sources:
 # 必填：控制走一步检验与内层交叉验证的切分方式。
 dataset_manager:
   walk_forward:
-    start_date: "2014-01-01"  # 必填：回测起始日期。
+    start_date: "2011-01-01"  # 必填：回测起始日期。
     end_date: "2025-09-30"  # 必填：回测结束日期。
-    train_window_type: "fixed"  # 必填：训练窗口类型，可选 expanding / fixed。
-    train_length: 504  # 必填：训练集最小包含的交易日数量。
+    train_window_type: "expanding"  # 必填：训练窗口类型，可选 expanding / fixed。
+    train_length: 756  # 必填：训练集最小包含的交易日数量。
     test_length: 21  # 必填：每个测试窗口的交易日数量。
     step_length: 21  # 必填：滑窗步长，控制下一次滚动的起始点。
     embargo_length: 5  # 必填：禁区长度，防止训练集与测试集信息泄漏。
@@ -59,20 +59,31 @@ model:
   preprocessor:
     method: "rank"  # 必填：预处理方式，可选 none/rank/standard_scaler。
     params: {}  # 选填：预处理器额外参数，此处标准化无需额外参数。
-  name: "lightgbm"  # 必填：模型名称，需要在 registry 中注册。
+  name: "lightgbm_ranker"  # 必填：模型名称，需要在 registry 中注册。
   params:
-    n_estimators: 100  # 选填：基学习器数量。
+    objective: "lambdarank"
+    lambdarank_truncation_level: 10
+    # metric: "ndcg"
+    n_estimators: 300  # 选填：基学习器数量。
     learning_rate: 0.05  # 选填：学习率，影响收敛速度。
-    num_leaves: 5  # 选填：叶节点最大数量，控制模型复杂度。
-    subsample: 0.8  # 选填：行采样比例，缓解过拟合。
-    colsample_bytree: 0.8  # 选填：列采样比例。
+    num_leaves: 16  # 选填：叶节点最大数量，控制模型复杂度。
+    # max_depth: 6
+    bagging_fraction: 0.8  # 选填：行采样比例，缓解过拟合。
+    bagging_freq: 10
+    feature_fraction: 0.8  # 选填：列采样比例。
     reg_alpha: 0.1  # 选填：L1 正则化系数。
     reg_lambda: 0.5  # 选填：L2 正则化系数。
-    num_threads: 20
+    max_bins: 127
+    num_threads: 31
     random_state: 42  # 选填：随机数种子，便于复现。
+    force_row_wise: true
+    # verbose: 2
+    relevance_grouping:
+      num_groups: 20
+      label_gain: null
   persistence:
     enable: true  # 选填：是否保存训练好的模型，默认 false。
-    save_path: "./artifacts/models"  # 启用时必填：模型保存目录。
+    save_path: "./artifacts/models4"  # 启用时必填：模型保存目录。
     filename_template: "{model_name}_{train_end_date}"  # 启用时必填：文件命名模板。
   tuning:
     enable: true  # 选填：是否启用配置化调参，默认 false。

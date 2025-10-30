@@ -133,7 +133,7 @@ def run_workflow(config_path: str, output_dir: str = "./artifacts") -> Dict[str,
             tuning_cfg,
             inner_cv_cfg,
         )
-
+        print(info)
         feature_pipeline = build_pipeline(pipeline_cfg, SELECTOR_REGISTRY)
         train_features = feature_pipeline.fit_transform(train_X, train_y)
         test_features = feature_pipeline.transform(test_X)

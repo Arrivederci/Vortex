@@ -56,7 +56,8 @@ df = cal_fuquan_price(df)
 total_len = len(df)
 lf = pl.from_pandas(df).lazy()
 
-factor_list = ["市值", "涨跌幅Std_20", "振幅Mean_20", "近期涨跌幅_20", "Bias_5"]
+factor_list = ["市值", "涨跌幅Std_20", "近期涨跌幅_20", "Rsj_20", "ROE_单季", "EP_单季",
+               "归母净利润同比增速_60", "换手率_20", "是否破N日前高_20", "当前回撤_20", "非流动性因子", "N日内有涨停_30"]
 factor_list = [f"factor_{name}.pkl" for name in factor_list]
 
 for file_name in tqdm(os.listdir(FACTOR_DATA_DIR)):
@@ -75,10 +76,10 @@ lf.with_columns(
     pl.col("交易日期").cast(pl.Date)
 )
 
-lf.sink_parquet("../../data/selected_factors_kline.parquet", mkdir=True, compression="zstd", compression_level=5, )
+lf.sink_parquet("../../data/selected_factors_kline3.parquet", mkdir=True, compression="zstd", compression_level=5, )
 
 
-df = pl.read_parquet("../../data/selected_factors_kline.parquet")
+df = pl.read_parquet("../../data/selected_factors_kline3.parquet")
 
 print(df.columns)
 print(df)

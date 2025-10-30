@@ -66,6 +66,7 @@ model:
     reg_alpha: 0.1  # 选填：L1 正则化系数。
     reg_lambda: 0.5  # 选填：L2 正则化系数。
     random_state: 42  # 选填：随机数种子，便于复现。
+    sample_weight_half_life_days: 63  # 选填：样本权重半衰期（单位：交易日），越接近训练窗口末尾权重越大。
   persistence:
     enable: true  # 选填：是否保存训练好的模型，默认 false。
     save_path: "./artifacts/models"  # 启用时必填：模型保存目录。
